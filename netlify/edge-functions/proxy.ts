@@ -1,39 +1,67 @@
 export default async (request: Request) => {
-  const targetURL = "https://f003.backblazeb2.com";
+  const targetOrigin = "https://f003.backblazeb2.com";
 
   const incomingUrl = new URL(request.url);
-  const target = new URL(targetURL);
+  const targetUrl = new URL(
+    incomingUrl.pathname + incomingUrl.search,
+    targetOrigin
+  );
 
-  // Κρατάμε path + query
-  const proxiedUrl = new URL(incomingUrl.pathname + incomingUrl.search, target);
-
-  const proxyRequest = new Request(proxiedUrl.toString(), {
-    method: request.method,
-    headers: request.headers,
-    body: request.body,
-    redirect: "follow",
-  });
-
-  proxyRequest.headers.set("host", target.hostname);
+  // Handle CORS preflight
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: corsHeaders(),
+    });
+  }
 
   try {
-    const response = await fetch(proxyRequest);
+    const response = await fetch(targetUrl.toString(), {
+      method: request.method,
+      headers: cleanHeaders(request.headers),
+      body: request.method !== "GET" && request.method !== "HEAD"
+        ? request.body
+        : undefined,
+    });
 
-    const modified = new Response(response.body, response);
+    const proxied = new Response(response.body, response);
 
     // CORS
-    modified.headers.set("Access-Control-Allow-Origin", "*");
-    modified.headers.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
-    modified.headers.set("Access-Control-Allow-Headers", "*");
+    applyCors(proxied);
 
-    // Cache (βάλε μεγαλύτερο για production)
-    modified.headers.set(
+    // Cache heavily (αλλιώς δεν έχει νόημα)
+    proxied.headers.set(
       "Cache-Control",
       "public, s-maxage=86400, stale-while-revalidate=3600"
     );
 
-    return modified;
+    return proxied;
   } catch (err) {
-    return new Response("Proxy error", { status: 500 });
+    return new Response("Proxy Error", { status: 500 });
   }
 };
+
+function cleanHeaders(headers: Headers) {
+  const newHeaders = new Headers(headers);
+
+  // Αφαιρούμε headers που χαλάνε proxy/cache
+  newHeaders.delete("host");
+  newHeaders.delete("connection");
+  newHeaders.delete("cookie");
+
+  return newHeaders;
+}
+
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+    "Access-Control-Allow-Headers": "*",
+  };
+}
+
+function applyCors(response: Response) {
+  response.headers.set("Access-Control-Allow-Origin", "*");
+  response.headers.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+  response.headers.set("Access-Control-Allow-Headers", "*");
+}
